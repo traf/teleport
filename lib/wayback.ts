@@ -28,21 +28,83 @@ function formatDate(ts: string): string {
 // is capped so it never needs to scroll; we down-sample evenly to keep the full span.
 const PROBES_PER_YEAR = ["0101", "0701"];
 const CONCURRENCY = 8;
-const MAX_VERSIONS = 25;
+const MAX_VERSIONS = 20;
 
 /**
- * The full version timeline, newest first. The CDX size-scan is too slow and flaky to lean
- * on, so instead we probe the Availability API at a fixed cadence across the site's whole
- * lifespan. Each probe returns the closest real capture; deduping collapses the set to the
- * distinct snapshots over time. Reliable, and capped to a scroll-free count.
+ * The full version timeline, newest first. CDX (filtered to real HTML 200 captures, one per
+ * month) is the source of truth — that keeps out redirects and non-page captures like Next.js
+ * RSC payloads, which otherwise render as raw flight text in the frame. If CDX flakes, we fall
+ * back to probing the Availability API across the lifespan, then to the single latest capture.
  */
 export async function fetchVersions(url: string): Promise<Snapshot[]> {
   const clean = cleanUrl(url);
+
+  const viaCdx = await fetchVersionsViaCdx(clean);
+  if (viaCdx.length) return viaCdx;
+
+  const viaProbe = await fetchVersionsViaProbe(clean);
+  if (viaProbe.length) return viaProbe;
+
+  const latest = await fetchLatestViaCdx(clean);
+  return latest ? [latest] : [];
+}
+
+/** Monthly HTML captures across the whole lifespan in a single CDX query, then narrowed to the
+ *  ones that look like real changes. The mimetype + statuscode filters guarantee each timestamp
+ *  resolves to an actual page (not a redirect or an RSC/flight response); `digest` + `length`
+ *  let us keep distinct versions instead of near-identical neighbours. */
+async function fetchVersionsViaCdx(clean: string): Promise<Snapshot[]> {
+  const params = new URLSearchParams({
+    url: clean,
+    output: "json",
+    fl: "timestamp,digest,length",
+    collapse: "timestamp:6",
+  });
+  params.append("filter", "statuscode:200");
+  params.append("filter", "mimetype:text/html");
+
+  const res = await fetch(`${CDX}?${params}`, {
+    signal: AbortSignal.timeout(25000),
+    headers: { "User-Agent": "teleport (wayback time machine)" },
+  }).catch(() => null);
+
+  const rows: string[][] | null = res && res.ok ? await res.json().catch(() => null) : null;
+  // Row 0 is the header; the rest are [timestamp, digest, length], oldest first.
+  const captures = (rows ?? [])
+    .slice(1)
+    .map((r) => ({ ts: r[0], digest: r[1], len: Number(r[2]) || 0 }))
+    .filter((c) => c.ts);
+  if (!captures.length) return [];
+
+  const ordered = pickDistinct(captures).sort((a, b) => b.localeCompare(a));
+  return downsample(ordered, MAX_VERSIONS).map(toSnapshot);
+}
+
+// Wayback has no "redesign" signal, so we approximate one: keep a capture when its content hash
+// changed AND its archived size jumped past a threshold from the last kept one — a cheap proxy
+// for a real visual change. Oldest and newest are always kept. Server-rendered sites surface
+// their distinct versions; JS-heavy SPAs (whose served HTML barely changes) honestly collapse
+// to the few points where the markup actually shifted.
+function pickDistinct(captures: { ts: string; digest: string; len: number }[]): string[] {
+  if (captures.length <= 2) return captures.map((c) => c.ts);
+  const SIZE_DELTA = 0.18;
+  const kept = [captures[0]];
+  for (let i = 1; i < captures.length - 1; i++) {
+    const prev = kept[kept.length - 1];
+    const c = captures[i];
+    const jumped = Math.abs(c.len - prev.len) / Math.max(prev.len, 1) >= SIZE_DELTA;
+    if (c.digest !== prev.digest && jumped) kept.push(c);
+  }
+  kept.push(captures[captures.length - 1]);
+  return kept.map((c) => c.ts);
+}
+
+/** Fallback timeline: probe the Availability API at a fixed cadence across the lifespan and
+ *  collapse to the distinct monthly captures. Less precise than CDX (no mimetype filter) but
+ *  resilient when the CDX index is slow or unavailable. */
+async function fetchVersionsViaProbe(clean: string): Promise<Snapshot[]> {
   const nowYear = new Date().getFullYear();
 
-  // Two fast lookups bound the lifespan so we don't waste probes on dead years. If they flake
-  // (the Availability API sometimes returns empty), fall back to a sensible default range
-  // rather than giving up — the dedupe collapses any dead years anyway.
   const [earliest, latest] = await Promise.all([
     availableAt(clean, "19960101"),
     availableAt(clean, `${nowYear}1231`),
@@ -55,15 +117,10 @@ export async function fetchVersions(url: string): Promise<Snapshot[]> {
   }
 
   const probed = await mapLimit(targets, CONCURRENCY, (t) => availableAt(clean, t));
-  // Dedupe by month so we never show two windows with the same date label.
   const byMonth = new Map<string, string>();
   if (latest) byMonth.set(latest.slice(0, 6), latest);
   for (const ts of probed) if (ts && !byMonth.has(ts.slice(0, 6))) byMonth.set(ts.slice(0, 6), ts);
-
-  if (byMonth.size === 0) {
-    const fallback = await fetchLatestViaCdx(clean);
-    return fallback ? [fallback] : [];
-  }
+  if (byMonth.size === 0) return [];
 
   const ordered = [...byMonth.values()].sort((a, b) => b.localeCompare(a));
   return downsample(ordered, MAX_VERSIONS).map(toSnapshot);
@@ -104,6 +161,12 @@ async function availableAt(clean: string, timestamp: string): Promise<string | n
 
   const data = res && res.ok ? await res.json().catch(() => null) : null;
   return data?.archived_snapshots?.closest?.timestamp ?? null;
+}
+
+/** The single newest HTML capture — fast (one targeted CDX lookup), for an instant first
+ *  window while the full timeline loads in parallel. */
+export async function fetchLatest(url: string): Promise<Snapshot | null> {
+  return fetchLatestViaCdx(cleanUrl(url));
 }
 
 /** Last good HTML capture, via CDX. Slower than the Availability API but reliable. */

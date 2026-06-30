@@ -1,31 +1,65 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Snapshot } from "@/lib/wayback";
 import Window from "./Window";
 import Timeline from "./Timeline";
 import Icon from "./Icon";
 import Nav from "./Nav";
+import Tab from "./Tab";
 
 type Props = {
   url: string;
   snapshots: Snapshot[];
+  initialIndex?: number;
+  onIndex?: (index: number) => void;
   onExit: () => void;
 };
 
-export default function Machine({ url, snapshots, onExit }: Props) {
-  const [index, setIndex] = useState(0);
+export default function Machine({ url, snapshots, initialIndex = 0, onIndex, onExit }: Props) {
+  const [index, setIndex] = useState(initialIndex);
   const [expanded, setExpanded] = useState(false);
   // Windows keep their iframe mounted once visited, so returning to one is instant and its
   // scroll and history are preserved instead of reloading from scratch.
-  const [visited, setVisited] = useState<Set<number>>(() => new Set([0]));
+  const [visited, setVisited] = useState<Set<number>>(() => new Set([initialIndex]));
   const last = snapshots.length - 1;
+
+  // Reflect the current version in the URL so any spot is shareable / reloadable.
+  useEffect(() => {
+    onIndex?.(index);
+  }, [index, onIndex]);
+
+  const rootRef = useRef<HTMLElement>(null);
+  const wheel = useRef(0);
+  const locked = useRef(false);
 
   const go = useCallback((next: number) => {
     const clamped = Math.min(last, Math.max(0, next));
     setIndex(clamped);
     setVisited((seen) => (seen.has(clamped) ? seen : new Set(seen).add(clamped)));
   }, [last]);
+
+  // Trackpad/wheel scrolls through versions: accumulate delta, step once per threshold, then
+  // brief-lock so a flick paces smoothly through the cascade instead of skipping a dozen.
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (expanded) return; // let the fullscreen page scroll itself
+      e.preventDefault();
+      if (locked.current) return;
+      wheel.current += e.deltaY * (e.deltaMode === 1 ? 16 : 1);
+      const STEP = 60;
+      if (Math.abs(wheel.current) < STEP) return;
+      const dir = wheel.current > 0 ? 1 : -1;
+      wheel.current = 0;
+      locked.current = true;
+      setTimeout(() => (locked.current = false), 260);
+      go(index + dir);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [index, expanded, go]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -45,19 +79,8 @@ export default function Machine({ url, snapshots, onExit }: Props) {
   }`;
 
   return (
-    <main className="cosmos relative h-dvh w-screen overflow-hidden">
-      <Nav
-        className={chrome}
-        left={
-          <button
-            onClick={onExit}
-            className="flex min-w-0 select-none items-center gap-2 rounded-full border border-border bg-elevated/70 px-3 py-2 text-sm text-muted backdrop-blur-md transition-colors duration-[var(--dur)] ease-snap hover:text-fg focus-visible:text-fg"
-          >
-            <Icon name="close" className="size-3.5 shrink-0" />
-            <span className="truncate max-w-[40vw]">{url}</span>
-          </button>
-        }
-      />
+    <main ref={rootRef} className="cosmos relative h-dvh w-screen overflow-hidden">
+      <Nav className={chrome} left={<Tab key={url} url={url} />} />
 
       <div className={`absolute inset-0 grid place-items-center [perspective:2600px] ${expanded ? "z-[60]" : ""}`}>
         <div

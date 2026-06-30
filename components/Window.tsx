@@ -116,15 +116,11 @@ function Frame({
         title={`${url} in ${snapshot.year}`}
         className="size-full"
         onLoad={onLoad}
-        // The active window runs the captured page's own JS (so runtime theming, layout, and
-        // hydration land closer to the real thing); inactive windows stay static. Windows
-        // first mount while active, so the page loads with scripts. We never grant
-        // allow-top-navigation, so frame-busting attempts can't break out of the app.
-        sandbox={
-          active
-            ? "allow-scripts allow-same-origin allow-popups allow-forms"
-            : "allow-same-origin allow-popups allow-forms"
-        }
+        // We render the static archived capture without running its scripts. Letting the
+        // page's own JS run causes script-driven sites (SPAs especially) to hydrate, fail to
+        // re-fetch un-archived data, and wipe themselves to a blank screen after first paint.
+        // Links still navigate within the frame; we never grant allow-top-navigation.
+        sandbox="allow-same-origin allow-popups allow-forms"
       />
     </Shell>
   );
