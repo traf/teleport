@@ -8,14 +8,15 @@ Next.js 16 (App Router) + React 19, TypeScript, Tailwind v4. Data is the public 
 Archive Wayback API. No backend, no database, no env vars.
 
 ## How it works
-1. `app/page.tsx` takes a URL and loads in two phases: `GET /api/latest` opens the machine
-   instantly on the newest snapshot (Availability API), then `GET /api/snapshots` streams
-   in the older versions behind it (slower CDX scan).
-2. `lib/wayback.ts` `fetchSnapshots` samples monthly captures (`collapse=timestamp:6`) and
-   segments the byte-size history into stable regimes (`detectVersions`): a size move opens
-   a new version only when it clears `REDESIGN_THRESHOLD` from the regime median AND the
-   next capture confirms it, so a single bloated/partial crawl can't fake a redesign. Each
-   regime is shown via its most complete capture. Newest first.
+1. `app/page.tsx` takes a URL and calls `GET /api/snapshots` once, waits for the whole
+   timeline, then opens the machine on all versions at once (a slower load, but complete).
+2. `fetchVersions` leans on the Wayback **Availability API**, which answers a "closest capture
+   to this date" lookup in well under a second. It bounds the site's lifespan with two
+   lookups, probes every year (Jan + Jul) across it with bounded concurrency (`mapLimit`, so
+   the archive doesn't rate-limit a burst), dedupes by month, and down-samples evenly to
+   `MAX_VERSIONS` (25) so the rail never scrolls. This replaced the CDX size-scan, which was
+   slow and routinely gateway-timed-out; CDX is now only a last-resort latest-capture
+   fallback (`fetchLatestViaCdx`).
 3. `components/Machine.tsx` lays the versions out in a 3D cascade and owns the `index`,
    `expanded`, and `visited` state. Arrow keys, the bottom control, and `Timeline.tsx` all
    drive `index`.
@@ -30,10 +31,14 @@ Archive Wayback API. No backend, no database, no env vars.
 - Components get one-word names and stay display-only; logic lives in `lib/` or the page.
 
 ## Gotchas
-- Versions are a byte-size proxy for redesigns, so a pure-CSS redesign (same HTML size) can
-  be missed. `REDESIGN_THRESHOLD` in `lib/wayback.ts` is the knob.
-- Iframes embed via the `if_` (toolbar-free) URL with a sandbox that omits `allow-scripts`:
-  running the captured JS tends to hydrate against dead APIs and wipe the HTML, or
-  frame-bust. Links still navigate (real anchors), which is what back/forward rides on.
+- The timeline is time-sampled (every ~6 months), not redesign-detected, so adjacent windows
+  can look similar and a short-lived redesign between probes can be missed. Cadence is
+  `PROBES_PER_YEAR` in `lib/wayback.ts`.
+- Iframes embed via the `if_` (toolbar-free) URL. The active window gets `allow-scripts` so
+  runtime theming/layout/hydration render closer to the real page; inactive windows stay
+  static. The sandbox never grants `allow-top-navigation`, so frame-busting can't escape the
+  app. Some captures' JS still hydrates against dead APIs and can blank out — that's the
+  trade for higher fidelity on script-driven sites.
 - Some archived pages refuse to embed (frame-busting headers); that's the snapshot, not us.
-- The CDX server can be slow (10 to 25s) for big domains; `/api/snapshots` times out at 25s.
+- `fetchVersions` fires ~40 parallel Availability lookups; the archive occasionally rate-
+  limits one, which just drops that probe (the dedupe still yields a full timeline).

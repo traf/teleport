@@ -5,15 +5,15 @@ import { Snapshot } from "@/lib/wayback";
 import Window from "./Window";
 import Timeline from "./Timeline";
 import Icon from "./Icon";
+import Nav from "./Nav";
 
 type Props = {
   url: string;
   snapshots: Snapshot[];
-  loadingMore?: boolean;
   onExit: () => void;
 };
 
-export default function Machine({ url, snapshots, loadingMore, onExit }: Props) {
+export default function Machine({ url, snapshots, onExit }: Props) {
   const [index, setIndex] = useState(0);
   const [expanded, setExpanded] = useState(false);
   // Windows keep their iframe mounted once visited, so returning to one is instant and its
@@ -46,20 +46,25 @@ export default function Machine({ url, snapshots, loadingMore, onExit }: Props) 
 
   return (
     <main className="cosmos relative h-dvh w-screen overflow-hidden">
-      <header className={`absolute inset-x-0 top-0 z-50 flex items-start p-4 sm:p-5 ${chrome}`}>
-        <button
-          onClick={onExit}
-          className="flex min-w-0 select-none items-center gap-2 rounded-full border border-border bg-elevated/70 px-3 py-2 text-sm text-muted backdrop-blur-md transition-colors duration-[var(--dur)] ease-snap hover:text-fg focus-visible:text-fg"
-        >
-          <Icon name="close" className="size-3.5 shrink-0" />
-          <span className="truncate max-w-[40vw]">{url}</span>
-        </button>
-      </header>
+      <Nav
+        className={chrome}
+        left={
+          <button
+            onClick={onExit}
+            className="flex min-w-0 select-none items-center gap-2 rounded-full border border-border bg-elevated/70 px-3 py-2 text-sm text-muted backdrop-blur-md transition-colors duration-[var(--dur)] ease-snap hover:text-fg focus-visible:text-fg"
+          >
+            <Icon name="close" className="size-3.5 shrink-0" />
+            <span className="truncate max-w-[40vw]">{url}</span>
+          </button>
+        }
+      />
 
       <div className={`absolute inset-0 grid place-items-center [perspective:2600px] ${expanded ? "z-[60]" : ""}`}>
         <div
           className={`relative [transform-style:preserve-3d] transition-[width,height] duration-[440ms] ease-snap ${
-            expanded ? "h-dvh w-screen" : "h-[68dvh] w-[92vw] sm:h-[72dvh] sm:w-[min(1150px,86vw)]"
+            expanded
+              ? "h-dvh w-screen"
+              : "translate-y-3 h-[68dvh] w-[92vw] sm:translate-y-4 sm:h-[72dvh] sm:w-[min(1150px,86vw)]"
           }`}
         >
           {snapshots.map((snap, i) => {
@@ -96,7 +101,7 @@ export default function Machine({ url, snapshots, loadingMore, onExit }: Props) 
         </div>
       </div>
 
-      <div className={`absolute right-5 top-1/2 z-50 hidden -translate-y-1/2 sm:block ${chrome}`}>
+      <div className={`absolute right-5 top-1/2 z-50 hidden -translate-y-1/2 min-[1440px]:block ${chrome}`}>
         <Timeline snapshots={snapshots} index={index} onSelect={go} />
       </div>
 
@@ -110,11 +115,6 @@ export default function Machine({ url, snapshots, loadingMore, onExit }: Props) 
         <Control label="Older" disabled={index === last} onClick={() => go(index + 1)} icon="down" />
       </div>
 
-      {loadingMore && (
-        <p className={`absolute bottom-[4.75rem] left-1/2 z-50 -translate-x-1/2 label animate-pulse text-faint ${chrome}`}>
-          summoning older versions…
-        </p>
-      )}
     </main>
   );
 }

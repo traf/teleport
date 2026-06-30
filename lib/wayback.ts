@@ -23,67 +23,97 @@ function formatDate(ts: string): string {
   return `${months[m] ?? "Jan"} ${y}`;
 }
 
-type Capture = { timestamp: string; size: number };
-
-// A redesign shifts the archived byte-size and the shift holds; re-crawls of the same
-// design stay flat. We treat a size move as a real version only when it persists.
-const REDESIGN_THRESHOLD = 0.3;
-
-function median(values: number[]): number {
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
+// Probe cadence per year (Jan + Jul); dedupe collapses dead spans to real captures. Probes
+// run a few at a time so the archive doesn't rate-limit a big parallel burst. The timeline
+// is capped so it never needs to scroll; we down-sample evenly to keep the full span.
+const PROBES_PER_YEAR = ["0101", "0701"];
+const CONCURRENCY = 8;
+const MAX_VERSIONS = 25;
 
 /**
- * Split the size series into stable regimes. A capture only opens a new regime when it
- * departs the regime's median by the threshold AND the next capture confirms it, so a
- * single bloated or partial crawl can't masquerade as a redesign. The regime median
- * (not the previous sample) is the reference, which resists noise and slow drift.
+ * The full version timeline, newest first. The CDX size-scan is too slow and flaky to lean
+ * on, so instead we probe the Availability API at a fixed cadence across the site's whole
+ * lifespan. Each probe returns the closest real capture; deduping collapses the set to the
+ * distinct snapshots over time. Reliable, and capped to a scroll-free count.
  */
-function detectVersions(captures: Capture[]): Capture[] {
-  if (captures.length === 0) return [];
-  const regimes: Capture[][] = [[captures[0]]];
-  let baseline = captures[0].size;
+export async function fetchVersions(url: string): Promise<Snapshot[]> {
+  const clean = cleanUrl(url);
+  const nowYear = new Date().getFullYear();
 
-  for (let i = 1; i < captures.length; i++) {
-    const cap = captures[i];
-    const departs = Math.abs(cap.size - baseline) / baseline >= REDESIGN_THRESHOLD;
-    const next = captures[i + 1];
-    const confirmed = !next || Math.abs(next.size - baseline) / baseline >= REDESIGN_THRESHOLD;
+  // Two fast lookups bound the lifespan so we don't waste probes on dead years. If they flake
+  // (the Availability API sometimes returns empty), fall back to a sensible default range
+  // rather than giving up — the dedupe collapses any dead years anyway.
+  const [earliest, latest] = await Promise.all([
+    availableAt(clean, "19960101"),
+    availableAt(clean, `${nowYear}1231`),
+  ]);
 
-    if (departs && confirmed) {
-      regimes.push([cap]);
-      baseline = cap.size;
-    } else {
-      const regime = regimes[regimes.length - 1];
-      regime.push(cap);
-      baseline = median(regime.map((c) => c.size));
-    }
+  const startYear = earliest ? Number(earliest.slice(0, 4)) : 2000;
+  const targets: string[] = [];
+  for (let y = startYear; y <= nowYear; y++) {
+    for (const md of PROBES_PER_YEAR) targets.push(`${y}${md}`);
   }
 
-  // Represent each regime with its most complete capture (deepest crawl, best assets),
-  // ignoring lone spikes that sit far above the regime's typical size.
-  return regimes.map((regime) => {
-    const typical = median(regime.map((c) => c.size)) * 1.5;
-    const sane = regime.filter((c) => c.size <= typical);
-    return (sane.length ? sane : regime).reduce((a, b) => (b.size > a.size ? b : a));
-  });
+  const probed = await mapLimit(targets, CONCURRENCY, (t) => availableAt(clean, t));
+  // Dedupe by month so we never show two windows with the same date label.
+  const byMonth = new Map<string, string>();
+  if (latest) byMonth.set(latest.slice(0, 6), latest);
+  for (const ts of probed) if (ts && !byMonth.has(ts.slice(0, 6))) byMonth.set(ts.slice(0, 6), ts);
+
+  if (byMonth.size === 0) {
+    const fallback = await fetchLatestViaCdx(clean);
+    return fallback ? [fallback] : [];
+  }
+
+  const ordered = [...byMonth.values()].sort((a, b) => b.localeCompare(a));
+  return downsample(ordered, MAX_VERSIONS).map(toSnapshot);
 }
 
-/**
- * One snapshot per visual version, newest first. We sample monthly captures and segment
- * the byte-size history into stable regimes (see detectVersions), so the timeline shows
- * the reliable, persistent redesigns rather than every transient crawl wobble.
- */
-export async function fetchSnapshots(url: string): Promise<Snapshot[]> {
-  const clean = cleanUrl(url);
+function toSnapshot(ts: string): Snapshot {
+  return { year: ts.slice(0, 4), timestamp: ts, date: formatDate(ts) };
+}
+
+/** Evenly thin a list to at most `n`, always keeping the first (newest) and last (oldest). */
+function downsample<T>(items: T[], n: number): T[] {
+  if (items.length <= n) return items;
+  const out: T[] = [];
+  for (let i = 0; i < n; i++) out.push(items[Math.round((i * (items.length - 1)) / (n - 1))]);
+  return [...new Set(out)];
+}
+
+/** Run an async map with bounded concurrency so we don't burst the archive into rate limits. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+/** Closest real capture to a given date via the Availability API, or null. */
+async function availableAt(clean: string, timestamp: string): Promise<string | null> {
+  const res = await fetch(`${AVAILABLE}?url=${encodeURIComponent(clean)}&timestamp=${timestamp}`, {
+    signal: AbortSignal.timeout(8000),
+    headers: { "User-Agent": "teleport (wayback time machine)" },
+  }).catch(() => null);
+
+  const data = res && res.ok ? await res.json().catch(() => null) : null;
+  return data?.archived_snapshots?.closest?.timestamp ?? null;
+}
+
+/** Last good HTML capture, via CDX. Slower than the Availability API but reliable. */
+async function fetchLatestViaCdx(clean: string): Promise<Snapshot | null> {
   const params = new URLSearchParams({
     url: clean,
     output: "json",
-    fl: "timestamp,length",
-    collapse: "timestamp:6",
-    limit: "1000",
+    fl: "timestamp",
+    limit: "-1",
+    fastLatest: "true",
   });
   params.append("filter", "statuscode:200");
   params.append("filter", "mimetype:text/html");
@@ -92,40 +122,11 @@ export async function fetchSnapshots(url: string): Promise<Snapshot[]> {
     signal: AbortSignal.timeout(25000),
     headers: { "User-Agent": "teleport (wayback time machine)" },
   });
-  if (!res.ok) throw new Error(`wayback responded ${res.status}`);
-
-  const rows: string[][] = await res.json();
-  if (!Array.isArray(rows) || rows.length < 2) return [];
-
-  // Drop the header row; keep only real captures (size > 0), oldest first.
-  const captures = rows
-    .slice(1)
-    .map(([timestamp, length]) => ({ timestamp, size: Number(length) || 0 }))
-    .filter((c) => c.size > 0);
-
-  return detectVersions(captures)
-    .map(({ timestamp }) => ({ year: timestamp.slice(0, 4), timestamp, date: formatDate(timestamp) }))
-    .reverse();
-}
-
-/**
- * The single most recent snapshot, via the Availability API. This returns in under a
- * second (unlike the multi-second CDX scan), so the machine can open on the latest
- * version instantly while the full history loads behind it.
- */
-export async function fetchLatest(url: string): Promise<Snapshot | null> {
-  const clean = cleanUrl(url);
-  const res = await fetch(`${AVAILABLE}?url=${encodeURIComponent(clean)}`, {
-    signal: AbortSignal.timeout(8000),
-    headers: { "User-Agent": "teleport (wayback time machine)" },
-  });
   if (!res.ok) return null;
 
-  const data = await res.json();
-  const ts: string | undefined = data?.archived_snapshots?.closest?.timestamp;
-  if (!ts) return null;
-
-  return { year: ts.slice(0, 4), timestamp: ts, date: formatDate(ts) };
+  const rows: string[][] = await res.json();
+  const ts = rows?.[1]?.[0];
+  return ts ? toSnapshot(ts) : null;
 }
 
 /** Toolbar-free archived page, ideal for embedding in a frame. */

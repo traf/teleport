@@ -116,10 +116,15 @@ function Frame({
         title={`${url} in ${snapshot.year}`}
         className="size-full"
         onLoad={onLoad}
-        // No allow-scripts on purpose: the archived page's own JS often hydrates against
-        // dead APIs and wipes the captured HTML, or busts out of the frame. Rendering the
-        // static capture (HTML/CSS/images) shows the design as it was and stays put.
-        sandbox="allow-same-origin allow-popups allow-forms"
+        // The active window runs the captured page's own JS (so runtime theming, layout, and
+        // hydration land closer to the real thing); inactive windows stay static. Windows
+        // first mount while active, so the page loads with scripts. We never grant
+        // allow-top-navigation, so frame-busting attempts can't break out of the app.
+        sandbox={
+          active
+            ? "allow-scripts allow-same-origin allow-popups allow-forms"
+            : "allow-same-origin allow-popups allow-forms"
+        }
       />
     </Shell>
   );

@@ -4,8 +4,8 @@ A time machine for the web. Drop a URL and watch it evolve, version by version, 
 
 ## How it works
 
-- Detects real redesigns from the Internet Archive by walking a site's capture history and segmenting it into stable size regimes, so you see drastic changes, not every re-crawl.
-- Opens instantly on the latest snapshot (Availability API), then streams in older versions behind it (CDX).
+- Builds a timeline from the Internet Archive by probing the Availability API across a site's whole lifespan, capped to a scroll-free set of versions spanning its full history.
+- Loads the whole timeline up front, then opens the machine on every version at once.
 - Renders each version in a sandboxed frame from the toolbar-free archive, with back, forward, reload, and fullscreen.
 
 ## Run locally
