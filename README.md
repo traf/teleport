@@ -32,4 +32,4 @@ No environment variables, no database, no API keys. It talks straight to the pub
 
 ## Stack
 
-Next.js 16 (App Router) and React 19, TypeScript, Tailwind v4. No component or icon libraries. See [`AGENTS.md`](./AGENTS.md) for architecture and conventions.
+Next.js 16 (App Router) and React 19, TypeScript, Tailwind v4. See [`AGENTS.md`](./AGENTS.md) for architecture and conventions.
