@@ -1,6 +1,8 @@
 # Teleport
 
-A time machine for the web. Drop a URL and watch it evolve, version by version, each one stacked like windows in time and browsable live inside its frame.
+A time machine for the web. Drop a URL and watch it evolve, version by version, each one stacked like windows in time.
+
+<img width="3562" height="1968" alt="og" src="https://github.com/user-attachments/assets/1f06a7f3-2e82-42f3-8a4e-4a1cd76e3716" />
 
 ## How it works
 
