@@ -1,26 +1,108 @@
 @import "tailwindcss";
 
+/* Dark monochrome. No hue anywhere; only lightness moves. White is the spotlight. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: hsl(0 0% 4%);
+  --surface: hsl(0 0% 8%);
+  --elevated: hsl(0 0% 12%);
+  --border: hsl(0 0% 20%);
+  --fg: hsl(0 0% 96%);
+  --muted: hsl(0 0% 60%);
+  --faint: hsl(0 0% 40%);
+  --accent: hsl(0 0% 96%);
+  --accent-fg: hsl(0 0% 6%);
+  --glow: hsl(0 0% 100% / 0.14);
+
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur: 180ms;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-elevated: var(--elevated);
+  --color-border: var(--border);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --ease-snap: var(--ease);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  height: 100%;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Backdrop: a faint white field bleeding from top into deep black. */
+.cosmos {
+  background:
+    radial-gradient(120% 80% at 50% -10%, var(--glow) 0%, transparent 55%),
+    var(--bg);
+}
+
+/* Text styles defined once, applied by role. */
+.title {
+  font-size: clamp(2.5rem, 7vw, 4.5rem);
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  line-height: 0.95;
+}
+.tagline {
+  font-size: clamp(1rem, 2.5vw, 1.15rem);
+  color: var(--muted);
+  letter-spacing: -0.01em;
+}
+.label {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Never the default browser outline; focus is styled per element instead. */
+:focus,
+:focus-visible {
+  outline: none;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }
